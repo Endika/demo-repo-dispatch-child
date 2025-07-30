@@ -1,0 +1,100 @@
+name: Child - Receive Parent Events
+
+on:
+  repository_dispatch:
+    types: [trigger-build]
+
+jobs:
+  receive-and-respond:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Child Repository
+      uses: actions/checkout@v4
+      
+    - name: Display Event Information
+      run: |
+        echo "🎯 Repository Dispatch Event Received!"
+        echo "========================================="
+        echo "📡 Event Type: ${{ github.event.action }}"
+        echo "👤 Actor: ${{ github.event.client_payload.actor || 'N/A' }}"
+        echo "🏠 Parent Repository: ${{ github.event.client_payload.parent_repository || 'N/A' }}"
+        echo "🌿 Parent Ref: ${{ github.event.client_payload.ref || 'N/A' }}"
+        echo "🔑 Parent SHA: ${{ github.event.client_payload.sha || 'N/A' }}"
+        echo "💬 Message: ${{ github.event.client_payload.message || 'N/A' }}"
+        echo "⏰ Timestamp: ${{ github.event.client_payload.timestamp || 'N/A' }}"
+        echo "🔗 Build URL: ${{ github.event.client_payload.build_url || 'N/A' }}"
+        
+        if [ "${{ github.event.client_payload.is_pr_command }}" = "true" ]; then
+          echo ""
+          echo "🎭 PR COMMAND DETECTED:"
+          echo "📝 PR Number: #${{ github.event.client_payload.pr_number || 'N/A' }}"
+          echo "📋 PR Title: ${{ github.event.client_payload.pr_title || 'N/A' }}"
+          echo "⚡ Command: /${{ github.event.client_payload.command || 'N/A' }}"
+          echo "🎯 This response will appear in the PR comments"
+        else
+          echo ""
+          echo "🌊 MAIN BRANCH MERGE DETECTED:"
+          echo "🎯 This will create a confirmation response"
+        fi
+        echo "========================================"
+        
+    - name: Process Event
+      run: |
+        echo "✅ Event processed successfully"
+        echo "📨 Preparing confirmation response..."
+        
+    - name: Create Response Payload
+      id: response
+      run: |
+        PARENT_REPO="${{ github.event.client_payload.parent_repository || github.event.client_payload.repository }}"
+        
+        # Check if this is a PR command for custom messaging
+        if [ "${{ github.event.client_payload.is_pr_command }}" = "true" ]; then
+          PR_INFO=" (from PR #${{ github.event.client_payload.pr_number }})"
+          MESSAGE="✅ Child received and confirmed /${{ github.event.client_payload.command }} command$PR_INFO"
+        else
+          MESSAGE="✅ Child received and confirmed main branch merge event"
+        fi
+        
+        echo "response_message=$MESSAGE" >> $GITHUB_OUTPUT
+        echo "response_status=success" >> $GITHUB_OUTPUT
+        echo "parent_repository=$PARENT_REPO" >> $GITHUB_OUTPUT
+
+    outputs:
+      response_status: ${{ steps.response.outputs.response_status }}
+      response_message: ${{ steps.response.outputs.response_message }}
+      parent_repository: ${{ steps.response.outputs.parent_repository }}
+
+  send-response-to-parent:
+    needs: receive-and-respond
+    runs-on: ubuntu-latest
+    environment: CI
+    if: always() && needs.receive-and-respond.result == 'success'
+    
+    steps:        
+    - name: Send Confirmation Response to Parent
+      uses: peter-evans/repository-dispatch@v3
+      with:
+        token: ${{ secrets.PAT }}
+        repository: ${{ needs.receive-and-respond.outputs.parent_repository }}
+        event-type: 'child-response'
+        client-payload: |
+          {
+            "child_repository": "${{ github.repository }}",
+            "response_status": "${{ needs.receive-and-respond.outputs.response_status }}",
+            "response_message": "${{ needs.receive-and-respond.outputs.response_message }}",
+            "child_workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "actor": "${{ github.actor }}",
+            "is_pr_command": "${{ github.event.client_payload.is_pr_command || 'false' }}",
+            "pr_number": "${{ github.event.client_payload.pr_number || '' }}",
+            "command": "${{ github.event.client_payload.command || '' }}",
+            "processed_at": "${{ github.run_id }}",
+            "confirmation_only": "true"
+          }
+           
+    - name: Response Status
+      run: |
+        echo "✅ Confirmation response sent successfully to parent repository"
+        echo "📡 Target: ${{ needs.receive-and-respond.outputs.parent_repository }}"
+
